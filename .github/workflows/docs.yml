@@ -37,7 +37,7 @@ jobs:
       - name: Build docs (warnings are errors)
         env: {GITHUB_REPOSITORY: "${{ github.repository }}"}
         run: sphinx-build -W --keep-going -b html docs docs/_build/html
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: docs-html, path: docs/_build/html}
 
   bench:
@@ -69,7 +69,7 @@ jobs:
           python -m atom_jepa_accel.bench --preset ci --name "$NAME" --output bench-out --max-minutes 30
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-${{ matrix.os }}-py${{ matrix.python }}
           path: bench-out/results-*.json
@@ -91,7 +91,7 @@ jobs:
           python src/atom_jepa_accel/bench/report.py results/results-*.json -o report/index.html \
             --title "atom_jepa_accel benchmarks — ${GITHUB_SHA::7}"
           mkdir -p report/data && cp results/results-*.json report/data/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: bench-report, path: report}
       - name: Fail if any equivalence check failed
         run: |
