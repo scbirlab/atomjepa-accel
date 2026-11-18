@@ -49,7 +49,8 @@ version = { attr = "atom_jepa_accel.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not slow'"
+markers = ["slow: production-size checks (minutes, > 3 GB RAM); run with -m slow"]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]

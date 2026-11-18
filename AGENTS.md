@@ -14,7 +14,7 @@ python -m atom_jepa_accel.bench --preset quick --output /tmp/b        # end-to-e
 python -m atom_jepa_accel status                      # what is active
 ```
 
-Prerequisites: Python >= 3.10, `torch>=2.1`, `atom-jepa`. Verified against `atom-jepa` 0.4.0 (PyPI) and the repository at commit `64d539b` (identical hashes).
+Prerequisites: Python >= 3.11, `torch>=2.1`, `atom-jepa`. Verified against `atom-jepa` 0.4.0 (PyPI) and the repository at commit `64d539b` (identical hashes).
 
 ## Architecture in one paragraph
 
@@ -24,8 +24,11 @@ Prerequisites: Python >= 3.10, `torch>=2.1`, `atom-jepa`. Verified against `atom
 `accelerate(model_or_body)` sets `gated_product = GatedGridProduct(grid)` on each block's attention activation and FFN
 grid MLP (only if none is set, so cuEquivariance/ROCm hooks are never overridden) and turns on `optimize_grid_mlp`,
 recording the previous flag so `unaccelerate` restores it. `GatedGridProduct` is a plain callable (not an
-`nn.Module`) holding the float64-derived coupling matrix, so `state_dict` is unchanged. `enable(retrofit=True)` also
-accelerates encoders that already exist (found via `gc`), tracked in a `WeakSet` so `disable()` can undo it.
+`nn.Module`) holding the float64 master coupling (cached per dtype/device, rebuilt if the grid matrices change), so
+`state_dict` is unchanged. A forward pre-hook on each block (`_toggle`) removes the hook from layers whose grid dropout upstream's contract forbids
+while they are training, and restores it in eval mode.
+`accelerate_existing()` / `enable(retrofit=True)` / `ATOM_JEPA_ACCEL_RETROFIT=1` accelerate encoders that already exist
+(found via `gc`, explicit opt-in), tracked in a `WeakSet` so `disable()` can undo it.
 
 ## Invariants — do not break these
 
@@ -40,9 +43,12 @@ accelerates encoders that already exist (found via `gc`), tracked in a `WeakSet`
 
 ## Things agents commonly get wrong here
 
-- **A/B comparisons**: `enable()` retrofits every existing encoder, including your reference model. Build the reference
-  with the package disabled and call `enable(retrofit=False)` afterwards (see `bench/_worker.py`), otherwise you will
-  time accelerated code against itself (speedup ~1.0, error exactly 0).
+- **A/B comparisons**: `accelerate_existing()` (or `enable(retrofit=True)`) accelerates every existing encoder, including
+  your reference model. Retrofit is opt-in and off by default; keep it off for A/B work (see `bench/_worker.py`), otherwise
+  you will time accelerated code against itself (speedup ~1.0, error exactly 0).
+- Never leave the hook live on a layer that is training with grid dropout (upstream raises), and do not claim the coupling is new: upstream has it.
+- `_toggle` mutates `owner.gated_product` per forward: do not claim thread safety: only sequential forwards are supported; same-mode concurrency is unvalidated; mixed modes are unsupported.
+- In tests, build the reference with the package disabled and assert it has no hooks (`tests/test_numerics.py::build_pair`).
 - Don't add a hash to `KNOWN_HASHES` without reading the upstream diff and re-verifying.
 - Don't claim a speedup without `python -m atom_jepa_accel.bench` (or `benchmarks/`) numbers on a stated CPU. Never
   fabricate or extrapolate timings (all published numbers: 2-vCPU VM; training at >= 4 molecules ran out of memory

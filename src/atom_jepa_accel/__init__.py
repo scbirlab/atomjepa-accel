@@ -4,11 +4,15 @@
     import atom_jepa            # ordinary code, unchanged
 
 * enables the grid-MLP path on CPU (upstream enables it only on CUDA);
-* replaces the S2-grid round trip in every gated activation by an exactly equivalent sparse
-  trilinear coupling (precomputed in float64 from the model's own grid matrices);
+* replaces the S2-grid round trip in every gated activation by an exactly equivalent trilinear coupling
+  (the Gaunt coupling upstream already uses for cuEquivariance/ROCm), precomputed in float64 from the model's
+  own grid matrices and applied as one dense GEMM;
+* layers with grid dropout use the coupling in eval mode and upstream's own path while training (its hook
+  contract forbids dropout there); a forward pre-hook on each block switches between the two;
 * no parameter, buffer or state_dict key changes.
 
-Set ATOM_JEPA_ACCEL_DISABLE=1 to prevent automatic activation.
+Set ATOM_JEPA_ACCEL_DISABLE=1 to prevent automatic activation. Models built before the import are only
+accelerated on request: ``accelerate(model)``, ``accelerate_existing()`` or ATOM_JEPA_ACCEL_RETROFIT=1.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import inspect
 import os
 import warnings
 import weakref
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 
@@ -35,23 +39,96 @@ _accelerated: weakref.WeakSet = weakref.WeakSet()  # bodies we modified, so disa
 class GatedGridProduct:
     """Exact replacement of the grid round trip  from_grid( to_grid(a) * to_grid(b) ) * gate.
 
-    C[o,i,j] = sum_g P[o,g] T[g,i] T[g,j] is built once in float64; it has ~85 non-zeros of 729,
-    which a dense GEMM over the flattened outer product exploits well on CPU. A plain callable
-    (not an nn.Module) so state_dict and parameter lists are untouched.
+    C[o,i,j] = sum_g P[o,g] T[g,i] T[g,j]. This is the same coupling that upstream's own cuEquivariance and ROCm
+    gated products use (``atom_jepa.models.equiformer_v3.admet_cue_ops``, ``atom_jepa.rocm_grid``); here it is
+    applied as one dense GEMM over the flattened outer product, which is what suits CPUs (it has ~85 non-zeros of
+    729, but ``experiments/coupling_alternatives`` shows indexed contraction is slower on CPU). It is the Gaunt
+    tensor product of the two inputs, not new mathematics.
+
+    The float64 master coupling is derived from the grid's own matrices and cached per ``(dtype, device)``.
+    It is rebuilt automatically if those matrices are replaced or modified in place (version counter), so
+    ``model.double()``, ``model.to(device)`` or edited grid buffers cannot leave it stale. float64 inputs use the
+    float64 master (no float32 round trip). A plain callable (not an nn.Module): state_dict and parameter lists
+    are untouched.
     """
 
     def __init__(self, grid):
-        T = grid.to_grid_mat.detach().double()
-        P = grid.from_grid_mat.detach().double()
+        self._grid = weakref.ref(grid)
+        self.S = grid.to_grid_mat.shape[1]
+        self._source = None
+        self._master = None
+        self._cache: Dict[tuple, torch.Tensor] = {}
+        self._rebuild(grid)
+
+    @staticmethod
+    def _source_key(grid):
+        T, P = grid.to_grid_mat, grid.from_grid_mat
+        return (id(T), T._version, tuple(T.shape), id(P), P._version, tuple(P.shape))
+
+    def _rebuild(self, grid):
+        T = grid.to_grid_mat.detach().cpu().double()
+        P = grid.from_grid_mat.detach().cpu().double()
+        if T.shape[1] != self.S:
+            raise ValueError("grid changed its number of coefficients after acceleration")
         C = torch.einsum("og,gi,gj->oij", P, T, T)
-        self.S = T.shape[1]
-        self.C = C.reshape(self.S, self.S * self.S).float()
+        self._master = C.reshape(self.S, self.S * self.S).contiguous()
+        self._source = self._source_key(grid)
+        self._cache.clear()
+
+    def coupling(self, dtype, device):
+        """The (S, S*S) coupling in ``dtype`` on ``device``, rebuilt first if the grid matrices changed."""
+        grid = self._grid()
+        if grid is not None and self._source_key(grid) != self._source:
+            self._rebuild(grid)
+        key = (dtype, str(device))
+        C = self._cache.get(key)
+        if C is None:
+            C = self._master.to(device=device, dtype=dtype)
+            self._cache[key] = C
+        return C
 
     def __call__(self, x, gate):
+        if x.dim() != 3 or x.shape[1] != self.S or x.shape[2] % 2:
+            raise ValueError(f"expected [nodes, {self.S}, 2*channels], got {tuple(x.shape)}")
         H = x.shape[2] // 2
         N = x.shape[0]
         outer = (x[..., :H].unsqueeze(2) * x[..., H:].unsqueeze(1)).reshape(N, self.S * self.S, H)
-        return torch.matmul(self.C.to(x.dtype), outer) * gate
+        return torch.matmul(self.coupling(x.dtype, x.device), outer) * gate
+
+
+def _grid_dropout_active(owner) -> bool:
+    """True if upstream's ``gated_product`` contract forbids the hook on this layer *while training*.
+
+    Upstream raises ("cuEquivariance grid fusion requires inactive grid dropout") when a hook is installed and
+    the layer is in training mode with grid dropout: the FFN grid MLP when ``dropout > 0``, the attention
+    activation when ``grid_drop`` is anything but ``Identity`` (even ``Dropout(p=0)``). The restriction is
+    behavioural, not structural: in eval mode the hook is fine.
+    """
+    drop = getattr(owner, "grid_drop", None)
+    if drop is not None and not isinstance(drop, torch.nn.Identity):
+        return True
+    return float(getattr(owner, "dropout", 0.0) or 0.0) > 0.0
+
+
+def _owners(blk):
+    return (blk.ga.act, blk.ffn.grid_mlp)
+
+
+def _toggle(blk, _args=None):
+    """Forward pre-hook on a block: our hook is live except while training a layer with grid dropout.
+
+    Such layers fall back to upstream's own (CPU-enabled) grid-MLP path in training and use the coupling in eval,
+    so a model with dropout configured is accelerated for inference and still trains correctly.
+
+    Mutable state: this assigns ``owner.gated_product`` on each forward. Sequential forwards are supported; concurrent
+    forwards in the same mode have not been independently validated; concurrent forwards in different modes, or
+    ``train()``/``eval()`` during a forward, are unsupported (see docs/compatibility.md).
+    """
+    for owner in _owners(blk):
+        if getattr(owner, "_aja_installed", False):
+            owner.gated_product = (
+                None if (owner.training and _grid_dropout_active(owner)) else owner._aja_product
+            )
 
 
 def _on_cpu(body) -> bool:
@@ -77,9 +154,18 @@ def accelerate(model_or_body, force: bool = False, _prev=None) -> bool:
             (blk.ga.act, blk.ga.act.so3_grid),
             (blk.ffn.grid_mlp, blk.ffn.so3_grid),
         ):
-            if getattr(owner, "gated_product", None) is None:  # never override cuEq / ROCm hooks
-                owner.gated_product = GatedGridProduct(grid)
-                owner._aja_installed = True
+            if getattr(owner, "_aja_installed", False):
+                continue  # already ours (idempotent)
+            if (
+                getattr(owner, "gated_product", None) is not None
+            ):  # never override cuEq / ROCm hooks
+                continue
+            owner._aja_product = GatedGridProduct(grid)
+            owner._aja_installed = True
+        if any(getattr(o, "_aja_installed", False) for o in _owners(blk)):
+            if not hasattr(blk, "_aja_hook"):
+                blk._aja_hook = blk.register_forward_pre_hook(_toggle)
+            _toggle(blk)
         if not hasattr(blk.ffn, "_aja_prev_optimize"):
             blk.ffn._aja_prev_optimize = bool(
                 blk.ffn.optimize_grid_mlp if _prev is None else _prev[i]
@@ -93,10 +179,14 @@ def unaccelerate(model_or_body) -> None:
     """Undo :func:`accelerate`, restoring each block's original grid-MLP flag."""
     body = _body_of(model_or_body)
     for blk in body.blocks:
-        for owner in (blk.ga.act, blk.ffn.grid_mlp):
+        if hasattr(blk, "_aja_hook"):
+            blk._aja_hook.remove()
+            del blk._aja_hook
+        for owner in _owners(blk):
             if getattr(owner, "_aja_installed", False):
                 owner.gated_product = None
                 owner._aja_installed = False
+                owner.__dict__.pop("_aja_product", None)
         if hasattr(blk.ffn, "_aja_prev_optimize"):
             blk.ffn.optimize_grid_mlp = blk.ffn._aja_prev_optimize
             del blk.ffn._aja_prev_optimize
@@ -112,8 +202,20 @@ def _auto_accelerate(body, prev=None) -> bool:
         return False
 
 
+def accelerate_existing() -> int:
+    """Accelerate every Atom-JEPA encoder that already exists in this process (CPU only); returns how many.
+
+    Explicit and opt-in because it scans ``gc.get_objects()``, which is too intrusive to do implicitly in a
+    long-lived process. It is only needed when this package is imported *after* models were built and cached
+    (for example by a program that memoizes its encoder). Programs started through ``python -m atom_jepa_accel``
+    or that import this package first build every model accelerated and do not need it. To accelerate one
+    specific model, call :func:`accelerate` on it instead.
+    """
+    return _retrofit_existing()
+
+
 def _retrofit_existing() -> int:
-    """Accelerate encoders that were built before this package was imported (CPU only)."""
+    """gc-based scan behind :func:`accelerate_existing`."""
     try:
         from atom_jepa.models.eqv3_backbone import HeadlessEquiformerV3 as Body
     except Exception:
@@ -139,12 +241,15 @@ def _digest(fn) -> str:
     return hashlib.sha256(inspect.getsource(fn).encode()).hexdigest()[:16]
 
 
-def enable(retrofit: bool = True) -> Dict:
-    """Patch atom_jepa so models are accelerated on CPU automatically (idempotent).
+def enable(retrofit: Optional[bool] = None) -> Dict:
+    """Patch atom_jepa so models built from now on are accelerated on CPU automatically (idempotent).
 
-    With ``retrofit=True`` (default) encoders that already exist, for example an encoder an application
-    loaded and memoized before importing this package, are accelerated too.
+    Existing encoders are left alone unless ``retrofit=True`` (or ``ATOM_JEPA_ACCEL_RETROFIT=1`` for the
+    automatic activation on import); see :func:`accelerate_existing`. ``retrofit=None`` means "use the
+    environment variable".
     """
+    if retrofit is None:
+        retrofit = os.environ.get("ATOM_JEPA_ACCEL_RETROFIT", "0") == "1"
     try:
         from atom_jepa.api import AtomJEPA
         from atom_jepa.models.eqv3_backbone import HeadlessEquiformerV3 as Body

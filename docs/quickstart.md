@@ -18,4 +18,5 @@ aja.accelerate(model)  # AtomJEPA, an encoder, or the EquiformerV3 body; CPU onl
 aja.unaccelerate(model)  # restores everything, including the previous grid-MLP flag
 ```
 Models loaded with `AtomJEPA.from_pretrained(..., device="cpu")` after the import are accelerated automatically; models
-that already exist when you import are retrofitted by `enable()`.
+that already exist when you import are **not** touched implicitly; use `aja.accelerate(model)` for one model, or
+`aja.accelerate_existing()` / `ATOM_JEPA_ACCEL_RETROFIT=1` for all of them (it scans `gc.get_objects()`, hence opt-in).

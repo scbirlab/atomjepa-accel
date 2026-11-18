@@ -66,6 +66,9 @@ jobs:
           python -m atom_jepa_accel status
       - name: Tests
         run: pytest -q --ignore=tests/integration
+      - name: Production-size numerical checks (released configuration)
+        if: matrix.python == '3.12' && matrix.upstream == 'release'
+        run: pytest -q -m slow tests/test_numerics.py
 
   aspect-integration:
     name: scbirlab/aspect integration (py3.12)

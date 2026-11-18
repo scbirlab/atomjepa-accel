@@ -68,7 +68,7 @@ def test_accel_really_active_in_aspect_loaded_encoder(aspect_atom_jepa):
     aja.enable()
 
 
-def test_encoder_loaded_before_import_is_retrofitted(aspect_atom_jepa):
+def test_encoder_loaded_before_import_is_retrofitted_on_request(aspect_atom_jepa):
     aja.disable()
     aspect_atom_jepa._load_atom_jepa_cached.cache_clear()
     enc = aspect_atom_jepa._load_atom_jepa(
@@ -79,8 +79,11 @@ def test_encoder_loaded_before_import_is_retrofitted(aspect_atom_jepa):
         {"c": rows}, "c"
     )  # memoized, unaccelerated
     assert getattr(enc.encoder.body.blocks[0].ga.act, "gated_product", None) is None
-    st = aja.enable()  # import happens "late"
-    assert st["accelerated_encoders"] >= 1
+    st = aja.enable()  # import happens "late": existing encoders are NOT touched implicitly ...
+    assert st["accelerated_encoders"] == 0
+    assert getattr(enc.encoder.body.blocks[0].ga.act, "gated_product", None) is None
+    assert aja.accelerate_existing() >= 1  # ... only on request
+    assert aja.status()["accelerated_encoders"] >= 1
     after = aspect_atom_jepa.AtomJEPAEmbedding(device="cpu")(
         {"c": rows}, "c"
     )  # same memoized encoder

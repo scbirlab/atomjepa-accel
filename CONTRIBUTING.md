@@ -25,7 +25,7 @@ required: tests build random-weight models in the real on-disk formats).
 
 | Path | What lives there |
 | --- | --- |
-| `src/atom_jepa_accel/__init__.py` | `GatedGridProduct`, `accelerate` / `unaccelerate`, `enable` / `disable` / `status`, retrofit of existing encoders |
+| `src/atom_jepa_accel/__init__.py` | `GatedGridProduct`, `accelerate` / `unaccelerate`, `enable` / `disable` / `status`, opt-in retrofit of existing encoders (`accelerate_existing`) |
 | `src/atom_jepa_accel/__main__.py` | `python -m atom_jepa_accel [--also PKG] -m MODULE ...` runner for programs you cannot edit |
 | `src/atom_jepa_accel/bench/` | benchmark worker, CLI orchestrator, stdlib-only HTML report |
 | `benchmarks/` | direct scripts: `bench_atom_jepa.py`, `sweep_batch_size.py`, `bench_aspect.py` |

@@ -14,7 +14,7 @@ python -m atom_jepa_accel --also unimol_accel script.py            # both accel 
 python -m atom_jepa_accel -m pytest path/to/aspect/test        # Aspect's own tests with accel on
 ```
 
-or, from Python, `import atom_jepa_accel` before the featuriser runs. Encoders that already exist when the package is imported (for example the one Aspect memoizes) are retrofitted by `enable()`.
+or, from Python, `import atom_jepa_accel` before the featuriser runs. An encoder that already exists when the package is imported (for example one Aspect memoized) is accelerated explicitly with `atom_jepa_accel.accelerate_existing()`; under `python -m atom_jepa_accel -m ...` the package is active before Aspect builds anything, so this is not needed.
 
 ## Input modes
 

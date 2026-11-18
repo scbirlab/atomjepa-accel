@@ -40,19 +40,30 @@ def batch():
     return GraphCollator(cutoff=6.0)([smiles_to_samples(s)[0] for s in SMILES[:5]])
 
 
+def _assert_reference_clean(enc):
+    for b in enc.body.blocks:
+        assert getattr(b.ga.act, "gated_product", None) is None
+        assert getattr(b.ffn.grid_mlp, "gated_product", None) is None
+
+
 def test_forward_equal(batch):
+    aja.disable()  # the reference must be built (and stay) unaccelerated
     ref_enc, new_enc = make_encoder().eval(), make_encoder().eval()
     new_enc.load_state_dict(ref_enc.state_dict())
+    _assert_reference_clean(ref_enc)
     with torch.no_grad():
         ref = ref_enc(batch)
     assert aja.accelerate(new_enc) is True
+    _assert_reference_clean(ref_enc)
     with torch.no_grad():
         out = new_enc(batch)
     assert (out - ref).norm() / ref.norm() < 1e-5
 
 
 def test_gradients_equal(batch):
+    aja.disable()
     ref_enc, new_enc = make_encoder().train(), make_encoder().train()
+    _assert_reference_clean(ref_enc)
     new_enc.load_state_dict(ref_enc.state_dict())
     for e in (ref_enc, new_enc):
         for m in e.modules():
@@ -112,3 +123,19 @@ def test_does_not_override_existing_hook():
     e.body.blocks[0].ga.act.gated_product = sentinel
     aja.accelerate(e)
     assert e.body.blocks[0].ga.act.gated_product is sentinel
+
+
+def test_existing_encoders_are_only_accelerated_on_request(monkeypatch):
+    aja.disable()
+    e = make_encoder()  # built before the package is (re-)enabled
+    aja.enable()
+    assert getattr(e.body.blocks[0].ga.act, "gated_product", None) is None
+    assert aja.accelerate_existing() >= 1
+    assert isinstance(e.body.blocks[0].ga.act.gated_product, aja.GatedGridProduct)
+    aja.disable()
+    monkeypatch.setenv("ATOM_JEPA_ACCEL_RETROFIT", "1")
+    e2 = make_encoder()
+    aja.enable()  # environment opt-in
+    assert isinstance(e2.body.blocks[0].ga.act.gated_product, aja.GatedGridProduct)
+    aja.disable()
+    aja.enable()

@@ -13,6 +13,6 @@ not one of the verified ones, the original code runs and `atom_jepa_accel.status
 | | Supported / tested |
 | --- | --- |
 | Atom-JEPA | `atom-jepa` 0.4.0 (PyPI) and the repository at commit `64d539b` (identical hashes) |
-| Python | >= 3.10; developed and measured on 3.13; CI matrix 3.10–3.14 plus non-blocking 3.15 (workflow written but not yet run) |
+| Python | >= 3.11; developed and measured on 3.13; CI matrix 3.11–3.14 plus non-blocking 3.15 (workflow written but not yet run) |
 | PyTorch | developed and measured with 2.15 (CPU); older versions are untested |
 | GPU | not accelerated; see {doc}`optimisations` |

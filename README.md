@@ -4,7 +4,7 @@
 <a href="https://github.com/scbirlab/atomjepa-accel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbirlab/atomjepa-accel/actions/workflows/ci.yml/badge.svg"></a>
 <a href="https://scbirlab.github.io/atomjepa-accel/"><img alt="Docs" src="https://img.shields.io/badge/docs-GitHub%20Pages-blue"></a>
 <a href="https://scbirlab.github.io/atomjepa-accel/benchmarks/report/"><img alt="Benchmarks" src="https://img.shields.io/badge/benchmarks-live%20report-informational"></a>
-<img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.14-blue">
+<img alt="Python" src="https://img.shields.io/badge/python-3.11%E2%80%933.14-blue">
 <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -20,7 +20,7 @@ atom_jepa_accel.accelerate(model)
 atom_jepa_accel.unaccelerate(model)
 atom_jepa_accel.disable()
 ```
-`ATOM_JEPA_ACCEL_DISABLE=1` prevents automatic activation.
+`ATOM_JEPA_ACCEL_DISABLE=1` prevents automatic activation. Encoders that were built *before* the import are only accelerated on request: `atom_jepa_accel.accelerate(model)` for one model, `atom_jepa_accel.accelerate_existing()` for all of them (scans `gc.get_objects()`), or `ATOM_JEPA_ACCEL_RETROFIT=1`.
 
 ## Use with Aspect (or any program you don't want to edit)
 
@@ -31,7 +31,7 @@ python -m atom_jepa_accel -m aspect.cli_module.cli featurize compounds.csv \
 python -m atom_jepa_accel --also unimol_accel script.py          # activate both accel packages
 python -m atom_jepa_accel -m pytest path/to/aspect/test          # run Aspect's own tests with accel on
 ```
-Aspect only embeds pre-generated conformers (`("smiles", ["conformers", "atom-jepa"])`); the native `AtomJEPA.embed` also accepts SMILES (conformers generated upstream). Both end in the same encoder and are covered by `tests/integration/`, including `layers="last"|"all"|<int>` (forward hooks on blocks), both released models, several conformers per molecule spanning batches, and an encoder that Aspect already loaded and memoized before this package was imported (`enable()` retrofits existing encoders; `disable()` restores them exactly).
+Aspect only embeds pre-generated conformers (`("smiles", ["conformers", "atom-jepa"])`); the native `AtomJEPA.embed` also accepts SMILES (conformers generated upstream). Both end in the same encoder and are covered by `tests/integration/`, including `layers="last"|"all"|<int>` (forward hooks on blocks), both released models, several conformers per molecule spanning batches, and an encoder that Aspect already loaded and memoized before this package was imported (accelerated explicitly with `accelerate_existing()`; `disable()` restores it exactly). Under `python -m atom_jepa_accel -m aspect...` the package is active before Aspect builds anything, so no retrofit is needed.
 
 ## What it does
 
@@ -63,6 +63,10 @@ Training at ≥ 4 molecules was OOM-killed on the 7 GB test machine (with the un
 
 Optional, off by default: `body.compile_blocks(dynamic=True)` on CPU gave a steady 1.63 s vs ≈2.2 s at batch 8 in a one-off test with a **15.9 s first call**, not under the interleaved protocol — indicative only. bf16 on AMX CPUs was ≈2e-3 relative error; not validated.
 
+## What is and is not new here
+
+The coupling `C[o,i,j] = Σ_g P[o,g] T[g,i] T[g,j]` is **upstream's own**: the cuEquivariance (`admet_cue_ops.GatedGridProduct`) and ROCm (`rocm_grid.ROCmGridProduct`) hooks build exactly this tensor from the model's grid matrices. It is also the Gaunt tensor product of the two inputs (the pointwise product of two S2 functions, projected back), a known construction in equivariant networks. This package contributes the CPU realisation (one dense GEMM; enabling the grid-MLP path that upstream turns on only for CUDA), the safety rails (hash guards, reversibility, hook and dropout handling) and the measurements, not new mathematics. `experiments/coupling_alternatives/` compares the dense GEMM with an indexed contraction over its 83 structural non-zeros and with an e3nn Clebsch-Gordan tensor product on the same shapes; on this CPU the dense GEMM is the fastest (see [optimisations](docs/optimisations.md)).
+
 ## Negative results
 
 - `packed_gemm` did not help on this CPU.
@@ -72,12 +76,16 @@ Optional, off by default: `body.compile_blocks(dynamic=True)` on CPU gave a stea
 
 - **Real pretrained weights could not be downloaded** (Hugging Face blocked), so equivalence tests use random weights saved in the real released layout and exercise the real `AtomJEPA.from_pretrained`/`embed` and Aspect code. The maths is exact, so real weights are expected to behave the same; please run `python -m atom_jepa_accel -m pytest path/to/aspect/test` where the weights are cached.
 - Many-core CPUs and CUDA were not measured.
+- **Thread safety.** The per-block pre-hook updates `owner.gated_product` on each forward (mutable state). Sequential forwards are supported; concurrent forwards in the same mode avoid the known train/eval switching hazard but have not been independently validated; concurrent forwards in different modes, or `train()`/`eval()` changes during a forward, are unsupported (use one model object per mode or thread). See [compatibility](docs/compatibility.md).
+- **Grid dropout.** Upstream's `gated_product` hook raises in training when a layer has grid dropout (the FFN grid MLP with `dropout > 0`; the attention activation with any non-`Identity` `grid_drop`, even `Dropout(p=0)`), which made accelerated models with dropout crash in training. A forward pre-hook on each block now switches those layers to upstream's own CPU-enabled path while training and back to the coupling in eval mode, so such a model is accelerated for inference and trains correctly (tested: zero dropout, dropout in training, dropout in eval, `Dropout(p=0)`, seeded equality with the original).
 
 ## Tests and benchmarks
 
 ```bash
 pip install -e .                   # plus: pip install "aspect-data[atom-jepa]" for tests/integration
-pytest tests                       # 23 tests: forward, gradients, state_dict, reversibility, retrofit, hook safety, Aspect
+pytest tests                       # forward, gradients, state_dict, reversibility, opt-in retrofit, hook safety, grid dropout,
+                                   # numerics (lmax 1-3, 1-256 channels, 1e-3..1e3 scales, float64, 25-step training), Aspect
+pytest -m slow tests/test_numerics.py   # released production-size configuration (256 ch, 8 layers)
 python benchmarks/bench_atom_jepa.py --batch 8 --train-batch 2 --repeats 5 [--device cuda] [--compile] [--json out.json]
 python benchmarks/sweep_batch_size.py
 python benchmarks/bench_aspect.py --n 24 --repeats 3
@@ -104,6 +112,6 @@ Each configuration runs in a fresh subprocess with a timeout and a global time b
   build with `pip install -e ".[docs]" && sphinx-build -W -b html docs docs/_build/html`. It builds warning-free here; publishing to
   GitHub Pages is done by `.github/workflows/docs.yml` once the owner enables Pages.
 - [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), [CHANGELOG.md](CHANGELOG.md), [SECURITY.md](SECURITY.md).
-- CI (`.github/workflows/ci.yml`, `docs.yml`): lint, Python 3.10-3.14 matrix (+ non-blocking 3.15), an upstream-`main` canary, Aspect integration, macOS/Windows/arm,
+- CI (`.github/workflows/ci.yml`, `docs.yml`): lint, Python 3.11-3.14 matrix (+ non-blocking 3.15), an upstream-`main` canary, Aspect integration, macOS/Windows/arm,
   packaging, and a multi-runner benchmark report. **These workflows have been linted with actionlint but not run**: this repository was
   prepared read-only and nothing has been pushed. Locally everything was run on Python 3.13 only.
