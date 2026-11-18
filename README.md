@@ -1,5 +1,14 @@
 # atom-jepa-accel
 
+<p align="left">
+<a href="https://github.com/scbirlab/atomjepa-accel/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbirlab/atomjepa-accel/actions/workflows/ci.yml/badge.svg"></a>
+<a href="https://scbirlab.github.io/atomjepa-accel/"><img alt="Docs" src="https://img.shields.io/badge/docs-GitHub%20Pages-blue"></a>
+<a href="https://scbirlab.github.io/atomjepa-accel/benchmarks/report/"><img alt="Benchmarks" src="https://img.shields.io/badge/benchmarks-live%20report-informational"></a>
+<img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.14-blue">
+<img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+</p>
+
+
 Drop-in **CPU** acceleration for [Atom-JEPA](https://github.com/khelverskovp/atom-jepa) (EquiformerV3 encoder), activated by one import. Pure PyTorch; parameters, buffers and `state_dict` keys are unchanged. Works under [scbirlab/aspect](https://github.com/scbirlab/aspect) (`atom-jepa` featuriser) without editing Aspect.
 
 ```python
@@ -86,6 +95,10 @@ Each configuration runs in a fresh subprocess with a timeout and a global time b
 `--output`; original and accelerated code are timed interleaved, and the exit status is non-zero if outputs or gradients disagree.
 
 ## Documentation, contributing, CI
+
+**Docs:** <https://scbirlab.github.io/atomjepa-accel/> · [Optimisations](https://scbirlab.github.io/atomjepa-accel/optimisations.html) · [Aspect usage](https://scbirlab.github.io/atomjepa-accel/aspect.html) · [Compatibility](https://scbirlab.github.io/atomjepa-accel/compatibility.html) ·
+**Benchmarks:** [methodology and results](https://scbirlab.github.io/atomjepa-accel/benchmarks/index.html) · [live multi-runner report (CI, latest main)](https://scbirlab.github.io/atomjepa-accel/benchmarks/report/)
+(these URLs work once the owner enables GitHub Pages and `docs.yml` has run).
 
 - Docs (Sphinx, pydata theme, modelled on [scbirlab/chemprop-accel](https://github.com/scbirlab/chemprop-accel)): `docs/`;
   build with `pip install -e ".[docs]" && sphinx-build -W -b html docs docs/_build/html`. It builds warning-free here; publishing to
