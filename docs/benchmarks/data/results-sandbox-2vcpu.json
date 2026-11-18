@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "package": "atom_jepa_accel",
+  "name": "sandbox-2vcpu",
+  "device": "cpu",
+  "created": "2026-11-18T15:46:00+00:00",
+  "host": {
+    "python": "3.13.18",
+    "os": "Linux 6.18.44-fc-v595",
+    "machine": "x86_64",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.30GHz",
+    "cpu_count": 2,
+    "torch": "2.15.0+cu132",
+    "torch_threads": 2,
+    "cuda": false,
+    "gpu": null,
+    "atom-jepa": "0.4.0",
+    "atom-jepa-accel": null,
+    "numpy": "2.2.6",
+    "rdkit": "2026.9.2"
+  },
+  "preset": "quick",
+  "runs": [
+    {
+      "kind": "inference",
+      "batch": 2,
+      "threads": 2,
+      "device": "cpu",
+      "repeats": 3,
+      "seed": 0,
+      "atoms": 54,
+      "accel_applied": true,
+      "original_s": [
+        1.220010531999833,
+        1.343151900999601,
+        1.3165205999998761
+      ],
+      "accel_s": [
+        0.6886297249998279,
+        0.5440654790004373,
+        0.5336321839999982
+      ],
+      "speedup": 2.419783373167879,
+      "rel_error": 1.4448464469296596e-07,
+      "tolerance": 1e-05,
+      "passed": true,
+      "status": "ok",
+      "wall_s": 13.110947855999711
+    },
+    {
+      "kind": "inference",
+      "batch": 8,
+      "threads": 2,
+      "device": "cpu",
+      "repeats": 3,
+      "seed": 0,
+      "atoms": 225,
+      "accel_applied": true,
+      "original_s": [
+        7.14145310899994,
+        6.786111963000167,
+        7.057077583999671
+      ],
+      "accel_s": [
+        2.6059241579996524,
+        2.621005399000296,
+        2.302802862000135
+      ],
+      "speedup": 2.708090165377949,
+      "rel_error": 1.410031984505622e-07,
+      "tolerance": 1e-05,
+      "passed": true,
+      "status": "ok",
+      "wall_s": 43.30756173300006
+    },
+    {
+      "kind": "train",
+      "batch": 2,
+      "threads": 2,
+      "device": "cpu",
+      "repeats": 3,
+      "seed": 0,
+      "atoms": 54,
+      "accel_applied": true,
+      "original_s": [
+        4.362170044999857,
+        4.076680295999722,
+        4.075090682999871
+      ],
+      "accel_s": [
+        2.068187206999937,
+        1.9198402709998845,
+        1.9845549060000849
+      ],
+      "speedup": 2.0542038336527373,
+      "status": "ok",
+      "wall_s": 31.533393899999737
+    },
+    {
+      "kind": "grad-check",
+      "batch": 4,
+      "threads": 2,
+      "device": "cpu",
+      "repeats": 3,
+      "seed": 0,
+      "atoms": 118,
+      "accel_applied": true,
+      "rel_error": 1.2039843966249464e-07,
+      "tolerance": 0.0001,
+      "passed": true,
+      "status": "ok",
+      "wall_s": 5.729782930000056
+    }
+  ],
+  "equivalence": [
+    {
+      "key": "inference/b2/t2",
+      "passed": true,
+      "rel_error": 1.4448464469296596e-07,
+      "tolerance": 1e-05
+    },
+    {
+      "key": "inference/b8/t2",
+      "passed": true,
+      "rel_error": 1.410031984505622e-07,
+      "tolerance": 1e-05
+    },
+    {
+      "key": "grad-check/b4/t2",
+      "passed": true,
+      "rel_error": 1.2039843966249464e-07,
+      "tolerance": 0.0001
+    }
+  ],
+  "status": {
+    "enabled": true,
+    "atom_jepa_accel": "0.1.0",
+    "torch": "2.15.0+cu132",
+    "patches": {
+      "set_grid_mlp_optimization": true,
+      "_configure_execution": true
+    },
+    "accelerated_encoders": 0,
+    "skipped_unverified": {},
+    "auto_error": null
+  }
+}
